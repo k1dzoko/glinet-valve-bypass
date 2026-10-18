@@ -1,0 +1,63 @@
+
+name: Update Valve bypass list
+
+on:
+  schedule:
+    - cron: '17 23 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-list:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download and merge lists
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SOURCE_URL="https://raw.githubusercontent.com/ipverse/as-ip-blocks/master/as/32590/ipv4-aggregated.txt"
+
+          curl --fail --silent --show-error --location \
+            "$SOURCE_URL" -o /tmp/valve-source.txt
+
+          sed 's/\r$//' /tmp/valve-source.txt \
+            | sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' \
+            | sort -u > /tmp/valve-ips.txt
+
+          count="$(grep -Ec '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' /tmp/valve-ips.txt || true)"
+
+          if [ "$count" -lt 5 ]; then
+            echo "ERROR: Valve source list is empty or invalid"
+            exit 1
+          fi
+
+          if [ -f extra-domains.txt ]; then
+            sed 's/\r$//' extra-domains.txt \
+              | sed 's/#.*$//' \
+              | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+              | grep -v '^$' \
+              | sort -u > /tmp/custom-rules.txt || true
+          else
+            : > /tmp/custom-rules.txt
+          fi
+
+          cat /tmp/valve-ips.txt /tmp/custom-rules.txt \
+            | sort -u > valve-bypass.txt
+
+          printf 'Last updated: %s UTC\n' \
+            "$(date -u '+%Y-%m-%d %H:%M:%S')" > last-updated.txt
+
+      - name: Commit and push generated list
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add valve-bypass.txt last-updated.txt
+          git commit -m "Refresh Valve bypass list"
+          git push
